@@ -1,0 +1,121 @@
+# Job Radar settings. Every key is optional; defaults live in job_radar/config.py.
+# Terms match whole words, any case, plural "s" allowed: "java" doesn't match "JavaScript",
+# "ai" doesn't match "maintain", "api" matches "APIs".
+
+# Points per group: 2x weight when a term is in the title, 1x when it's only in the text.
+keywords = [
+  { terms = ["typescript"], weight = 3 },
+  { terms = ["react", "react.js", "reactjs"], weight = 3 },
+  { terms = ["next.js", "nextjs"], weight = 3 },
+  { terms = ["node.js", "nodejs", "node"], weight = 2 },
+  { terms = ["llm", "openai", "anthropic", "langchain", "langgraph", "rag", "generative ai", "genai", "ai agent"], weight = 2 },
+  { terms = ["javascript"], weight = 1 },
+  { terms = ["full stack", "full-stack", "fullstack"], weight = 1 },
+  { terms = ["postgresql", "postgres", "neon"], weight = 1 },
+  { terms = ["prisma", "drizzle"], weight = 1 },
+  { terms = ["tailwind"], weight = 1 },
+  { terms = ["stripe"], weight = 1 },
+  { terms = ["ai"], weight = 1 },
+  { terms = ["python"], weight = 1 },
+  { terms = ["contract", "contractor", "freelance"], weight = 1 },
+  { terms = ["legal tech", "legaltech", "lawtech"], weight = 1 },
+]
+
+[run]
+max_age_days = 3      # skip postings older than this
+min_score = 6         # keyword score a job needs to reach the shortlist
+max_results = 15      # jobs per digest
+notify_empty = false  # also send a message when nothing matched
+
+[profile]
+# What the LLM rates jobs against. This file is public, so the summary below is only an example:
+# the real profile lives in the LLM_PROFILE secret, which replaces it when set.
+summary = """
+Full-stack developer with a few years of experience.
+Main stack: TypeScript, React, Next.js, Node.js, PostgreSQL. Ships LLM features to production.
+Wants remote contract or full-time work open to the EU or worldwide; junior to mid level.
+"""
+reason_language = "Russian"
+
+[title]
+# A title needs one of these to count as a dev job...
+require_any = [
+  "developer", "engineer", "programmer", "full stack", "full-stack", "fullstack",
+  "frontend", "front-end", "front end", "backend", "back-end", "back end",
+  "software", "web", "react", "next.js", "node", "typescript", "javascript", "ai automation",
+  "розробник", "програміст", "разработчик", "программист",
+]
+# ...and is dropped when it names a stack or role from this list...
+reject_any = [
+  "android", "ios", "flutter", "swift", "kotlin", "mobile",
+  "java", "c#", ".net", "asp.net", "php", "laravel", "wordpress", "drupal", "magento",
+  "ruby", "rails", "golang", "go developer", "go engineer", "rust", "scala", "elixir", "c++",
+  "embedded", "firmware", "angular", "vue", "svelte", "solidity", "blockchain",
+  "salesforce", "sap", "servicenow", "devops", "sre", "site reliability", "platform engineer", "infrastructure",
+  "data engineer", "data scientist", "analyst", "qa", "test", "tester", "sdet",
+  "designer", "manager", "sales", "support", "recruiter", "unity", "unreal", "game",
+]
+# ...unless it also names this stack ("Java/React Developer" stays).
+rescue_any = ["react", "next.js", "nextjs", "node", "node.js", "typescript", "javascript"]
+
+[location]
+# Location text counts as a fit when it names one of these...
+ok = ["worldwide", "anywhere", "global", "europe", "european", "eu", "emea", "eea", "cet", "eet", "cyprus", "ukraine"]
+# ...and rules the job out when it names one of these instead.
+blocked = [
+  "us", "usa", "u.s.", "united states", "canada", "north america", "americas", "latam", "latin america",
+  "uk", "united kingdom", "india", "apac", "asia", "australia", "new zealand", "brazil", "mexico",
+  "argentina", "colombia", "philippines", "singapore", "japan", "israel",
+  "germany", "france", "spain", "italy", "netherlands", "poland", "portugal", "romania", "sweden",
+  "switzerland", "ireland", "austria", "belgium", "denmark", "greece",
+]
+bonus = 2
+utc_offsets = [-1, 5]  # a job limited to time zones outside this range is dropped
+# Anywhere in a posting, these rule it out.
+reject_phrases = [
+  "us only", "u.s. only", "usa only", "us-only", "us based only", "north america only", "canada only", "uk only", "latam only",
+  "us citizens", "u.s. citizens", "us citizenship", "u.s. citizenship", "green card", "security clearance",
+  "must be located in the us", "must be based in the us", "must reside in the us", "must live in the us",
+  "authorized to work in the us", "authorized to work in the united states", "eligible to work in the us",
+  "fluent german", "german speaking", "native german", "fluent french", "fluent dutch", "fluent spanish",
+  "fluent italian", "fluent portuguese", "fluent polish", "fluent japanese", "fluent greek",
+]
+
+[seniority]
+reject_titles = ["staff", "principal", "director", "head of", "vp", "vice president", "chief", "cto", "architect", "intern", "internship", "trainee"]
+penalty_titles = ["senior", "sr", "lead"]
+title_penalty = 3
+max_years = 4       # postings that ask for more years lose points
+years_penalty = 4
+
+[sources]
+disabled = []  # e.g. ["hn_jobs", "djinni"]; names are listed in job_radar/sources.py
+himalayas_queries = ["typescript", "next.js", "react", "node.js", "llm"]
+himalayas_country = "Cyprus"  # only jobs open to this country (worldwide ones included)
+wwr_feeds = [
+  "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
+  "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss",
+  "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",
+]
+dou_feeds = [
+  "https://jobs.dou.ua/vacancies/feeds/?category=Node.js&remote",
+  "https://jobs.dou.ua/vacancies/feeds/?category=Front%20End&remote",
+  "https://jobs.dou.ua/vacancies/feeds/?category=AI/ML&remote",
+  "https://jobs.dou.ua/vacancies/feeds/?search=Next.js&remote",
+]
+djinni_feeds = [
+  "https://djinni.co/jobs/rss/?primary_keyword=Fullstack&employment=remote",
+  "https://djinni.co/jobs/rss/?primary_keyword=Node.js&employment=remote",
+  "https://djinni.co/jobs/rss/?primary_keyword=JavaScript&employment=remote",
+  "https://djinni.co/jobs/rss/?primary_keyword=React.js&employment=remote",
+]
+
+[llm]
+# Any OpenAI-compatible API; the key comes from LLM_API_KEY. Without a key, jobs are ranked by keywords.
+base_url = "https://api.groq.com/openai/v1"
+model = "openai/gpt-oss-120b"  # same free-tier limits as gpt-oss-20b, better judgement
+reasoning_effort = "low"
+max_jobs = 15                # top jobs rated in one request
+min_fit = 5                  # rating (0-10) a job needs to reach the digest
+description_chars = 600      # posting text per job; keeps one request under Groq's free 8k tokens/minute
+max_completion_tokens = 2000

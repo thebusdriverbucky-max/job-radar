@@ -1,0 +1,45 @@
+name: Job Radar
+
+on:
+  schedule:
+    - cron: "23 5,10,15,20 * * *"  # 4 runs a day (UTC); GitHub may start them late or skip one under load
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: job-radar
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+
+      # Jobs already sent live in the Actions cache: no commits, no database.
+      - name: Restore seen jobs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .state
+          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: seen-
+
+      - name: Find jobs and send the digest
+        run: uv run --frozen --no-dev python -m job_radar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_PROFILE: ${{ secrets.LLM_PROFILE }}
+
+      - name: Save seen jobs
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .state
+          key: seen-${{ github.run_id }}-${{ github.run_attempt }}
