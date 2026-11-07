@@ -10,6 +10,7 @@ from job_radar.sources import (
     parse_himalayas,
     parse_hn_comments,
     parse_remoteok,
+    split_dou_salary,
     split_dou_title,
     split_wwr_title,
     strip_html,
@@ -56,6 +57,8 @@ def test_split_titles():
     assert split_dou_title("Розробник в команду AI в Acme, Київ, віддалено") == (
         "Розробник в команду AI", "Acme", "Київ, віддалено"
     )
+    assert split_dou_salary("$3000–10000, Київ, віддалено") == ("$3000–10000", "Київ, віддалено")
+    assert split_dou_salary("Київ, віддалено") == ("", "Київ, віддалено")
 
 
 def test_parse_remoteok_skips_terms_notice():
@@ -106,7 +109,16 @@ def test_parse_dou_feed():
       <pubDate>Fri, 30 Oct 2026 14:00:00 +0200</pubDate>
     </item></channel></rss>"""
     [job] = parse_dou(ElementTree.fromstring(rss).findall(".//item"))
-    assert (job.title, job.company, job.location) == ("Node.js Developer", "Acme", "віддалено")
+    assert (job.title, job.company, job.location, job.salary) == ("Node.js Developer", "Acme", "віддалено", "")
     assert (job.id, job.description, job.posted_at) == (
         "https://jobs.dou.ua/companies/acme/vacancies/123/", "TypeScript, NestJS", NOON
     )
+
+
+def test_parse_dou_unescapes_title_and_moves_salary():
+    rss = """<rss><channel><item>
+      <title>Full-Stack Dev &amp;amp; AI в Acme, до&amp;nbsp;$3000, віддалено</title>
+      <link>https://jobs.dou.ua/companies/acme/vacancies/124/</link>
+    </item></channel></rss>"""
+    [job] = parse_dou(ElementTree.fromstring(rss).findall(".//item"))
+    assert (job.title, job.company, job.salary, job.location) == ("Full-Stack Dev & AI", "Acme", "до $3000", "віддалено")

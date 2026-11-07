@@ -102,6 +102,17 @@ def split_dou_title(raw: str) -> tuple[str, str, str]:
     return title.strip(), company.strip(), location.strip()
 
 
+_DOU_SALARY = re.compile(r"[$€]|грн")
+
+
+def split_dou_salary(location: str) -> tuple[str, str]:
+    """'до $3000, Київ, віддалено' → ('до $3000', 'Київ, віддалено'); DOU puts the salary first."""
+    first, _, rest = location.partition(", ")
+    if _DOU_SALARY.search(first):
+        return first, rest
+    return "", location
+
+
 def describe_error(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"HTTP {exc.response.status_code} from {exc.request.url.host}"
@@ -299,7 +310,9 @@ def parse_hn_jobs(items: list[dict]) -> list[Job]:
 def parse_dou(items: list[ElementTree.Element]) -> list[Job]:
     jobs = []
     for item in items:
-        title, company, location = split_dou_title(_text(item, "title"))
+        # Titles come HTML-escaped twice ("до&amp;nbsp;$3000"); strip_html undoes both.
+        title, company, location = split_dou_title(strip_html(_text(item, "title")))
+        salary, location = split_dou_salary(location)
         link = _text(item, "link")
         jobs.append(Job(
             source="dou",
@@ -308,6 +321,7 @@ def parse_dou(items: list[ElementTree.Element]) -> list[Job]:
             company=company,
             url=link,
             location=location,
+            salary=salary,
             description=strip_html(_text(item, "description")),
             posted_at=parse_date(_text(item, "pubDate")),
         ))
