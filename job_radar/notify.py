@@ -8,10 +8,12 @@ from dataclasses import dataclass
 
 import httpx
 
-from .models import Candidate
+from .models import Candidate, by_section
 from .sources import LABELS, SourceResult
 
 TELEGRAM_LIMIT = 3900  # the API allows 4096 characters per message
+HEADINGS = {"remote": "Remote", "cyprus": "Cyprus", "gigs": "Gigs"}
+_COUNTED = {"remote": ("remote", "remote"), "cyprus": ("Cyprus", "Cyprus"), "gigs": ("gig", "gigs")}
 
 
 @dataclass
@@ -25,6 +27,15 @@ class Summary:
     llm_used: bool
     dismissed: int
     digest: list[Candidate]
+    enriched: int = 0  # job pages read for what the feeds leave out
+
+    def sections(self) -> list[tuple[str, list[Candidate]]]:
+        """The digest by section, empty sections left out."""
+        return [(name, cands) for name, cands in by_section(self.digest).items() if cands]
+
+    def counts(self, sep: str = " · ") -> str:
+        """"5 remote · 1 Cyprus · 2 gigs", or "" when the digest is empty."""
+        return sep.join(_count(name, len(cands)) for name, cands in self.sections())
 
     def stats(self) -> str:
         boards = ", ".join(f"{s.name} FAILED" if s.error else f"{s.name} {s.count}" for s in self.sources)
@@ -33,32 +44,54 @@ class Summary:
             llm = f"LLM kept {self.shortlisted - self.dismissed} of {self.shortlisted}"
         else:
             llm = "LLM off, ranked by keywords"
-        return f"Boards: {boards}\nNew: {self.new} · rejected: {rejected} · {llm} · digest: {len(self.digest)}"
+        pages = f" · job pages: {self.enriched}" if self.enriched else ""
+        digest = self.counts(sep=" + ") or "empty"
+        return f"Boards: {boards}\nNew: {self.new}{pages} · rejected: {rejected} · {llm} · digest: {digest}"
+
+
+def _count(section: str, n: int) -> str:
+    one, many = _COUNTED.get(section, (section, section))
+    return f"{n} {one if n == 1 else many}"
 
 
 def _label(source: str) -> str:
     return LABELS.get(source, source)
 
 
+def _heading(section: str) -> str:
+    return HEADINGS.get(section, section.title())
+
+
+def _flags(cand: Candidate) -> list[str]:
+    """What moved the fit: "+stripe +mcp" for the bonus, then one "⚠ …" per warning."""
+    flags = [" ".join(f"+{term}" for term in cand.bonus)] if cand.bonus else []
+    return flags + [f"⚠ {warning}" for warning in cand.warnings]
+
+
 # --- Telegram --------------------------------------------------------------------
 
 def telegram_messages(summary: Summary) -> list[str]:
-    header = f"<b>Job Radar</b> · {len(summary.digest)} new"
-    if not summary.digest:
-        header += ", nothing matched this time"
-    blocks = [header, *(_telegram_job(n, cand) for n, cand in enumerate(summary.digest, 1))]
+    sections = summary.sections()
+    blocks = [f"<b>Job Radar</b> · {summary.counts() or 'nothing new matched this time'}"]
+    for name, cands in sections:
+        for n, cand in enumerate(cands, 1):
+            block = _telegram_job(n, cand)
+            if n == 1 and len(sections) > 1:
+                block = f"<b>{_heading(name)}</b>\n\n{block}"  # one block, so a message never ends on a heading
+            blocks.append(block)
     return pack_messages(blocks, TELEGRAM_LIMIT)
 
 
 def _telegram_job(n: int, cand: Candidate) -> str:
     job, esc = cand.job, html.escape
     location = job.location if job.location != job.title else ""  # HN titles already include it
-    details = " · ".join(x for x in (job.company, location[:60], job.employment, job.salary) if x)
+    mode = job.work_mode if job.track == "cyprus" else ""  # every other job is remote
+    details = " · ".join(x for x in (job.company, location[:60], mode, job.employment, job.salary) if x)
     rating = f"fit {cand.fit}/10" if cand.fit is not None else f"score {cand.score}"
     lines = [f'<b>{n}.</b> <a href="{esc(job.url)}">{esc(job.title)}</a>']
     if details:
         lines.append(esc(details))
-    lines.append(f"{esc(_label(job.source))} · {rating}")
+    lines.append(esc(" · ".join([_label(job.source), rating, *_flags(cand)])))
     if cand.reason:
         lines.append(f"<i>{esc(cand.reason)}</i>")
     return "\n".join(lines)
@@ -110,30 +143,38 @@ async def _post(client: httpx.AsyncClient, url: str, payload: dict) -> httpx.Res
 # --- Reports -----------------------------------------------------------------------
 
 def console_report(summary: Summary, verbose: bool = False) -> str:
-    lines = [summary.stats(), ""]
-    for n, cand in enumerate(summary.digest, 1):
-        job = cand.job
-        fit = f"{cand.fit:>2}" if cand.fit is not None else " -"
-        lines.append(f"{n:>2}. fit {fit} · score {cand.score:>2} · {job.title} — {job.company or '?'}"
-                     f" [{_label(job.source)}] {job.location[:40]}")
-        lines.append(f"    {job.url}")
-        if cand.reason:
-            lines.append(f"    {cand.reason}")
-        if verbose:
-            lines.append(f"    {' '.join(cand.notes)}")
+    lines = [summary.stats()]
+    for name, cands in summary.sections():
+        lines += ["", f"{_heading(name)}:"]
+        for n, cand in enumerate(cands, 1):
+            job = cand.job
+            fit = f"{cand.fit:>2}" if cand.fit is not None else " -"
+            lines.append(f"{n:>2}. fit {fit} · score {cand.score:>2} · {job.title} — {job.company or '?'}"
+                         f" [{_label(job.source)}] {job.location[:40]}")
+            lines.append(f"    {job.url}")
+            if flags := _flags(cand):
+                lines.append(f"    {' · '.join(flags)}")
+            if cand.reason:
+                lines.append(f"    {cand.reason}")
+            if verbose:
+                lines.append(f"    {' '.join(cand.notes)}")
     return "\n".join(lines)
 
 
 def markdown_report(summary: Summary) -> str:
-    lines = [f"### Job Radar: {len(summary.digest)} new", "", "```", summary.stats(), "```", ""]
+    lines = [f"### Job Radar: {summary.counts() or 'nothing new'}", "", "```", summary.stats(), "```", ""]
     if summary.digest:
-        lines += ["| # | Fit | Score | Job | Board | Location |", "|---|---|---|---|---|---|"]
-        for n, cand in enumerate(summary.digest, 1):
-            job = cand.job
-            title = _md(f"{job.title} — {job.company}" if job.company else job.title)
-            fit = cand.fit if cand.fit is not None else "–"
-            lines.append(f"| {n} | {fit} | {cand.score} | [{title}]({job.url}) | {_label(job.source)}"
-                         f" | {_md(job.location[:40])} |")
+        lines += [
+            "| Section | # | Fit | Score | Job | Board | Location | Flags |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for name, cands in summary.sections():
+            for n, cand in enumerate(cands, 1):
+                job = cand.job
+                title = _md(f"{job.title} — {job.company}" if job.company else job.title)
+                fit = cand.fit if cand.fit is not None else "–"
+                lines.append(f"| {_heading(name)} | {n} | {fit} | {cand.score} | [{title}]({job.url})"
+                             f" | {_label(job.source)} | {_md(job.location[:40])} | {_md(' · '.join(_flags(cand)))} |")
     return "\n".join(lines) + "\n"
 
 

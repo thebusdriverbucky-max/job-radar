@@ -1,15 +1,25 @@
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from xml.etree import ElementTree
 
 import pytest
 
 from job_radar.sources import (
+    dou_countries,
     format_salary,
+    html_to_text,
+    parse_ago,
     parse_date,
+    parse_day,
+    parse_djinni_page,
     parse_dou,
+    parse_ergodotisi,
+    parse_ergodotisi_page,
     parse_himalayas,
     parse_hn_comments,
+    parse_jobicy,
     parse_remoteok,
+    parse_telegram,
     split_dou_salary,
     split_dou_title,
     split_wwr_title,
@@ -23,6 +33,10 @@ def test_strip_html():
     assert strip_html("<p>Hello&nbsp;<b>world</b> &amp; co</p>") == "Hello world & co"
     assert strip_html("&lt;p&gt;Remote, async&lt;/p&gt;") == "Remote, async"  # escaped twice
     assert strip_html(None) == ""
+
+
+def test_html_to_text_keeps_paragraphs_and_list_items():
+    assert html_to_text("<p>Hi&nbsp;there</p><ul><li>React</li><li>Node</li></ul>") == "Hi there\nReact\nNode"
 
 
 @pytest.mark.parametrize("value", [
@@ -122,3 +136,190 @@ def test_parse_dou_unescapes_title_and_moves_salary():
     </item></channel></rss>"""
     [job] = parse_dou(ElementTree.fromstring(rss).findall(".//item"))
     assert (job.title, job.company, job.salary, job.location) == ("Full-Stack Dev & AI", "Acme", "до $3000", "віддалено")
+
+
+def test_parse_jobicy_reads_salary_period_and_level():
+    data = {"jobs": [
+        {"id": 7, "jobTitle": "Full Stack Engineer", "companyName": "Acme", "url": "https://jobicy.com/jobs/7",
+         "jobGeo": "EMEA", "jobLevel": "Senior", "jobType": ["full-time"], "pubDate": "2026-10-30 12:00:00",
+         "salaryMin": 4000, "salaryMax": 5000, "salaryCurrency": "EUR", "salaryPeriod": "monthly",
+         "jobDescription": "<p>React</p>"},
+        {"id": 8, "jobTitle": "Developer", "url": "https://jobicy.com/jobs/8", "jobLevel": "Any"},
+    ]}
+    senior, anyone = parse_jobicy(data)
+    assert (senior.salary, senior.level, senior.employment, senior.posted_at) == (
+        "€4k–5k monthly", "Senior", "full-time", NOON
+    )
+    assert (anyone.level, anyone.salary) == ("", "")
+
+
+@pytest.mark.parametrize(("location", "countries"), [
+    ("віддалено", ["Україна"]),
+    ("Київ, віддалено", ["Україна"]),
+    ("за кордоном, віддалено", []),  # abroad: the location text decides
+    ("Київ, Варшава (Польща), віддалено", ["Україна", "Польща"]),
+    ("Ларнака (Кіпр)", ["Кіпр"]),
+    ("", []),
+])
+def test_dou_countries(location, countries):
+    assert dou_countries(location) == countries
+
+
+def test_parse_dou_dates_a_renewed_vacancy_by_its_id():
+    rss = """<rss><channel>
+      <item><title>Dev в Acme, віддалено</title><link>https://jobs.dou.ua/companies/acme/vacancies/350000/</link>
+        <pubDate>Fri, 30 Oct 2026 12:00:00 +0000</pubDate></item>
+      <item><title>Dev в Beta, віддалено</title><link>https://jobs.dou.ua/companies/beta/vacancies/349000/</link>
+        <pubDate>Fri, 30 Oct 2026 10:00:00 +0000</pubDate></item>
+      <item><title>Dev в Gamma, віддалено</title><link>https://jobs.dou.ua/companies/gamma/vacancies/349950/</link>
+        <pubDate>Thu, 29 Oct 2026 12:00:00 +0000</pubDate></item>
+    </channel></rss>"""
+    newest, renewed, recent = parse_dou(ElementTree.fromstring(rss).findall(".//item"))
+    assert newest.posted_at == NOON
+    assert renewed.posted_at == NOON - timedelta(days=10)  # 1000 ids, about 10 days, older
+    assert recent.posted_at == datetime(2026, 10, 29, 12, tzinfo=UTC)  # its date fits its id
+
+
+@pytest.mark.parametrize(("text", "days"), [
+    ("12 days ago", 12), ("an hour ago", 1 / 24), ("a month ago", 30), ("yesterday", 1), ("today", 0),
+])
+def test_parse_ago(text, days):
+    assert parse_ago(text, NOON) == NOON - timedelta(days=days)
+
+
+@pytest.mark.parametrize(("text", "day"), [
+    ("28 September", datetime(2026, 9, 28, 12, tzinfo=UTC)),
+    ("30 September 2025", datetime(2025, 9, 30, 12, tzinfo=UTC)),
+    ("15 December", datetime(2025, 12, 15, 12, tzinfo=UTC)),  # no year and still ahead: last year
+    ("today", NOON),
+    ("31 February", None),
+    ("soon", None),
+])
+def test_parse_day(text, day):
+    assert parse_day(text, NOON) == day
+
+
+DJINNI_PAGE = """
+<div id="job-publication-info" class="mb-1">
+  <div>
+    <span class="font-weight-500">Published 30 September 2025</span>
+      <span class="middot"> · </span>Updated 30 October
+  </div>
+</div>
+<div>
+    Response activity: <span class="fw-medium text-secondary">Low</span>
+</div>
+<div data-bs-toggle="tooltip" title="21:21 27.08.2026">
+    <span class="dot bg-secondary"></span>
+ Last responded more than a month ago
+</div>
+<aside>
+  <strong class="font-weight-600 capitalize-first-letter">
+      Only
+        from
+        5 years of experience
+  </strong>
+  <strong class="d-block font-weight-600">
+    <span class="location-text">Countries of Europe or Ukraine</span>
+</strong>
+
+      <div class="font-size-extra-small">Countries where we consider candidates</div>
+</aside>
+<script type="application/ld+json">
+  {"@context": "https://schema.org", "@type": "JobPosting", "datePosted": "2026-10-30T09:00:00",
+   "hiringOrganization": {"@type": "Organization", "name": "Acme"}}
+</script>
+"""
+
+
+def test_parse_djinni_page():
+    assert parse_djinni_page(DJINNI_PAGE, NOON) == {
+        "min_years": 5,
+        "location": "Countries of Europe or Ukraine",
+        "countries": ["Countries of Europe or Ukraine"],
+        "reply_rate": "low",
+        "last_reply": datetime(2026, 8, 27, 21, 21, tzinfo=UTC),
+        "posted_at": datetime(2025, 9, 30, 12, tzinfo=UTC),  # first publication, not the renewal
+        "company": "Acme",
+    }
+
+
+def test_djinni_years_take_the_lower_bar():
+    page = "<aside>Only from 5 years of experience. Considering with 3 years of experience</aside>"
+    assert parse_djinni_page(page, NOON) == {"min_years": 3}
+    assert parse_djinni_page("<aside>No experience</aside>", NOON) == {"min_years": 0}
+
+
+ERGODOTISI_PAGE = """
+<article class="jobs-card " data-analytics-job-id-value="40356202">
+  <a class="jobs-card__ref d-lg-none" href="/en-CY/jobs/react-developer-40356202?utm=x&amp;y=1">View</a>
+  <a class="jobs-card__company" aria-label="View company: Acme" href="https://ergodotisi.com/en-CY/companies/acme">
+    Acme
+</a>      <h3 class="jobs-card__title" aria-label="Vacancy title">React Developer</h3>
+  <div class="jobs-card__meta">
+    <div class="jobs-card__meta-item featured"><svg></svg><span>€34,000&ndash;45,000 yearly</span></div>
+    <div class="jobs-card__meta-item"><span>Larnaca, Cyprus</span></div>
+    <div class="jobs-card__meta-item"><span>Hybrid</span></div>
+    <div class="jobs-card__meta-item"><span>Full-time</span></div>
+    <div class="jobs-card__meta-item"><span>Mid-Level</span></div>
+  </div>
+  <div class="jobs-card__description">We build fast apps &amp; tools.</div>
+  <div class="jobs-card__timestamp "><span>12 days ago</span></div>
+</article>
+<article class="jobs-card" data-analytics-job-id-value="2">
+  <a href="/en-CY/jobs/developer-2">View</a><h3 class="jobs-card__title">Developer</h3>
+  <div class="jobs-card__meta-item"><span>€1–1</span></div>
+</article>
+<article class="jobs-card">an ad, not a job</article>
+"""
+
+
+def test_parse_ergodotisi_cards():
+    full, bare = parse_ergodotisi(ERGODOTISI_PAGE, NOON)
+    assert (full.key, full.title, full.company, full.url) == (
+        "ergodotisi:40356202", "React Developer", "Acme",
+        "https://ergodotisi.com/en-CY/jobs/react-developer-40356202?utm=x&y=1",
+    )
+    assert (full.location, full.work_mode, full.level, full.salary, full.employment) == (
+        "Larnaca, Cyprus", "hybrid", "Mid-Level", "€34,000–45,000 yearly", "Full-time"
+    )
+    assert (full.description, full.posted_at, full.track) == ("We build fast apps & tools.", NOON - timedelta(days=12), "cyprus")
+    assert (bare.salary, bare.company, bare.posted_at) == ("", "", None)  # "€1–1" means not disclosed
+
+
+def test_parse_ergodotisi_page_reads_json_ld():
+    ld = {"@context": "https://schema.org", "@graph": [
+        {"@type": "Organization", "name": "Ergodotisi"},
+        {"@type": "JobPosting", "description": "<p>React &amp; Node</p><p>Office in Larnaca</p>",
+         "datePosted": "2026-10-30T12:00:00Z", "hiringOrganization": {"name": "Acme Ltd"},
+         "experienceRequirements": {"@type": "OccupationalExperienceRequirements", "monthsOfExperience": 36}},
+    ]}
+    page = f'<script type="application/ld+json">{json.dumps(ld)}</script>'
+    assert parse_ergodotisi_page(page) == {
+        "description": "React & Node\nOffice in Larnaca", "posted_at": NOON, "company": "Acme Ltd", "min_years": 3,
+    }
+    assert parse_ergodotisi_page("<html>no data</html>") == {}
+
+
+TELEGRAM_PAGE = """
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="cyithr/20118">
+<div class="tgme_widget_message_text js-message_text" dir="auto"><a href="?q=%23vacancy">#vacancy</a> \
+<a href="?q=%23frontend">#frontend</a><br/><br/><b><i class="emoji"><b>\N{ROCKET}</b></i> Vacancy: Frontend Developer \
+(React) <i class="emoji"><b>\N{ROCKET}</b></i></b><br/>\N{ROUND PUSHPIN} Larnaca, Cyprus<br/>We&#39;re on #TypeScript, \
+Next.js and C#&#33;</div>
+<time datetime="2026-10-30T12:00:00+00:00" class="time"></time></div></div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="cyithr/20119">
+<div class="tgme_widget_message_text js-message_text" dir="auto">Hiring in Limassol<br/>Location: Limassol, office\
+<br/>Payroll Accountant</div></div></div>
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message" data-post="cyithr/20120">
+<div class="tgme_widget_message_photo"></div></div></div>
+"""
+
+
+def test_parse_telegram_posts():
+    dev, other = parse_telegram(TELEGRAM_PAGE, ["developer", "engineer"])
+    assert (dev.key, dev.url, dev.title) == ("telegram:cyithr/20118", "https://t.me/cyithr/20118", "Frontend Developer (React)")
+    assert (dev.location, dev.posted_at, dev.track) == ("Larnaca, Cyprus", NOON, "cyprus")
+    assert dev.tags == ["vacancy", "frontend", "TypeScript"]
+    assert dev.description == "Vacancy: Frontend Developer (React)\nLarnaca, Cyprus\nWe're on TypeScript, Next.js and C#!"
+    assert (other.title, other.location, other.posted_at) == ("Hiring in Limassol", "Limassol, office", None)

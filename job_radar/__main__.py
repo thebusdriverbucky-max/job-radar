@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import sys
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import httpx
 
 from . import llm, notify, scoring, sources
 from .config import Config, load_config
-from .models import Job
+from .models import SECTIONS, Candidate, Job, by_section
 from .state import SeenJobs
 
 log = logging.getLogger("job_radar")
@@ -20,17 +21,49 @@ log = logging.getLogger("job_radar")
 USER_AGENT = "job-radar/0.1 (personal job-search bot)"
 
 
-def select_new(jobs: list[Job], seen: SeenJobs, since: datetime) -> list[Job]:
-    """Drop old postings, ones already handled, and the same job reposted on another board."""
+def select_new(jobs: list[Job], seen: SeenJobs, since: datetime, dropped: Counter[str] | None = None) -> list[Job]:
+    """Drop old postings, ones already handled, and the same job reposted on another board.
+
+    `dropped`, when given, counts what went: "old" and "duplicate".
+    """
     new: list[Job] = []
     taken: set[str] = set()
     for job in jobs:
         ids = {job.key, job.fingerprint}
-        if (job.posted_at and job.posted_at < since) or ids & taken or any(i in seen for i in ids):
+        if job.posted_at and job.posted_at < since:
+            reason = "old"
+        elif ids & taken or any(i in seen for i in ids):
+            reason = "duplicate"
+        else:
+            taken |= ids
+            new.append(job)
             continue
-        taken |= ids
-        new.append(job)
+        if dropped is not None:
+            dropped[reason] += 1
     return new
+
+
+def pages_to_read(jobs: list[Job], cfg: Config, now: datetime) -> list[Job]:
+    """Jobs whose page may change the verdict: they pass on the feed alone, or nearly do. Passing ones first."""
+    screened = [scoring.screen(job, cfg, now) for job in jobs if job.source in sources.ENRICHERS]
+    hopeful = [cand for cand in screened if scoring.near_miss(cand, cfg)]
+    hopeful.sort(key=lambda c: (not c.rejected, c.score), reverse=True)
+    return [cand.job for cand in hopeful[: cfg.sources.detail_pages]]
+
+
+def pick_shortlist(candidates: list[Candidate], cfg: Config) -> list[Candidate]:
+    """The best of each section for the LLM: gigs and Cyprus get their own slots, remote jobs the rest."""
+    groups = by_section(candidates)
+    cyprus, gigs = groups["cyprus"][: cfg.cyprus.max_jobs], groups["gigs"][: cfg.gigs.max_jobs]
+    remote = groups["remote"][: max(0, cfg.llm.max_jobs - len(cyprus) - len(gigs))]
+    return [*remote, *cyprus, *gigs]
+
+
+def pick_digest(kept: list[Candidate], cfg: Config) -> list[Candidate]:
+    """Up to each section's own limit, sections in digest order."""
+    limits = {"remote": cfg.run.max_results, "cyprus": cfg.cyprus.max_results, "gigs": cfg.gigs.max_results}
+    groups = by_section(kept)
+    return [cand for name in SECTIONS for cand in groups[name][: limits[name]]]
 
 
 async def run(cfg: Config, dry_run: bool) -> int:
@@ -44,16 +77,23 @@ async def run(cfg: Config, dry_run: bool) -> int:
         if all(r.error for r in results):
             log.error("Every board failed, nothing to rank")
             return 1
-        new = select_new(jobs, seen, since=now - timedelta(days=cfg.run.max_age_days))
-        candidates, rejected = scoring.screen_all(new, cfg)
+        since = now - timedelta(days=cfg.run.max_age_days)
+        new = select_new(jobs, seen, since)
+        # Some feeds leave the years, countries or first publication date to the job page:
+        # read the pages that could change a verdict, then check everything again with what they say.
+        enriched = await sources.enrich(client, pages_to_read(new, cfg, now), now)
+        dropped: Counter[str] = Counter()  # e.g. a renewed posting that turns out to be months old
+        new_after_pages = select_new([enriched.get(job.key, job) for job in new], seen, since, dropped)
+        candidates, rejected = scoring.screen_all(new_after_pages, cfg, now)
+        rejected.update(dropped)
 
-        shortlist = candidates[: cfg.llm.max_jobs]
+        shortlist = pick_shortlist(candidates, cfg)
         verdicts = await llm.rank(client, shortlist, cfg)
         if verdicts is None:
             kept, dismissed = candidates, []
         else:
             kept, dismissed = llm.apply(shortlist, verdicts, cfg.llm.min_fit)
-        digest = kept[: cfg.run.max_results]
+        digest = pick_digest(kept, cfg)
 
         summary = notify.Summary(
             sources=results,
@@ -63,6 +103,7 @@ async def run(cfg: Config, dry_run: bool) -> int:
             llm_used=verdicts is not None,
             dismissed=len(dismissed),
             digest=digest,
+            enriched=len(enriched),
         )
         print(notify.console_report(summary, verbose=dry_run))
         notify.write_github_summary(notify.markdown_report(summary))
@@ -75,8 +116,11 @@ async def run(cfg: Config, dry_run: bool) -> int:
                 log.error("Sending the digest failed: %s", sources.describe_error(exc))
                 return 1  # state stays as it was, so the next run retries these jobs
 
-    # Sent jobs and the ones the LLM turned down are never shown again.
+    # Sent jobs and the ones the LLM turned down are never shown again, and a page that
+    # ruled its job out isn't read again on the next run.
     seen.add((key for cand in [*digest, *dismissed] for key in (cand.job.key, cand.job.fingerprint)), now)
+    passed = {cand.job.key for cand in candidates}
+    seen.add((key for key in enriched if key not in passed), now)
     seen.save(now)
     return 0
 

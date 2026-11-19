@@ -25,8 +25,15 @@ Candidate:
 {profile}
 
 Rate each job's fit from 0 to 10: 8-10 strong match on stack, level and location; 5-7 worth applying; 0-4 skip.
-Give 0-2 when the job is on-site or hybrid, needs relocation, a location or work permit the candidate lacks, \
-a language they don't speak, a main stack outside JavaScript/TypeScript/Python, or far more experience than they have.
+Give 0-2 when the job needs relocation, a location or work permit the candidate lacks, a language they don't speak, \
+a main stack outside JavaScript/TypeScript, 4 or more years of experience, or a work format the rules below rule out.
+Give at most 4 when the title says Senior, Lead or Staff ("Middle/Senior" is fine), the main backend is Python or Go, \
+or the frontend is React Native, Angular or Vue.
+Work format: fully remote. Jobs marked "track": "cyprus" are in Cyprus, where the candidate lives: on-site or hybrid \
+is fine near their home (see Candidate), anywhere else in Cyprus only fully remote. "format", when given, \
+is the work format the board states.
+"gig": true marks paid-per-task side work such as AI training: rate it on skills alone.
+"level" and "years", when given, are the seniority and the years of experience the board states.
 "reason": in {language}, at most 15 words, the deciding factor.
 Reply with JSON only: {{"jobs": [{{"id": "<id>", "fit": <0-10>, "reason": "<text>"}}]}} with one entry per job."""
 
@@ -65,6 +72,28 @@ def excerpt(text: str, limit: int) -> str:
     return f"{text[:head]} … {text[match.start():match.start() + limit - head]}"
 
 
+def _job_entry(job_id: str, cand: Candidate, chars: int) -> dict:
+    job = cand.job
+    entry: dict = {
+        "id": job_id,
+        "title": job.title,
+        "company": job.company,
+        "location": job.location[:120],
+        "type": job.employment,
+        "salary": job.salary,
+    }
+    extras = {  # only what the board actually says, to save tokens
+        "track": job.track if job.track != "remote" else None,
+        "gig": True if cand.gig else None,
+        "format": job.work_mode or None,
+        "level": job.level or None,
+        "years": job.min_years,
+    }
+    entry |= {key: value for key, value in extras.items() if value is not None}
+    entry["text"] = excerpt(job.description, chars)
+    return entry
+
+
 async def rank(client: httpx.AsyncClient, shortlist: list[Candidate], cfg: Config) -> dict[str, Verdict] | None:
     """Verdicts keyed by job key; None when the LLM is off or failed."""
     api_key = os.environ.get("LLM_API_KEY")
@@ -73,18 +102,7 @@ async def rank(client: httpx.AsyncClient, shortlist: list[Candidate], cfg: Confi
     if not shortlist:
         return {}
     by_id = {f"j{i}": cand for i, cand in enumerate(shortlist, 1)}  # short ids save tokens
-    jobs = [
-        {
-            "id": job_id,
-            "title": cand.job.title,
-            "company": cand.job.company,
-            "location": cand.job.location[:120],
-            "type": cand.job.employment,
-            "salary": cand.job.salary,
-            "text": excerpt(cand.job.description, cfg.llm.description_chars),
-        }
-        for job_id, cand in by_id.items()
-    ]
+    jobs = [_job_entry(job_id, cand, cfg.llm.description_chars) for job_id, cand in by_id.items()]
     profile = os.environ.get("LLM_PROFILE") or cfg.profile.summary
     system = SYSTEM_PROMPT.format(profile=profile.strip(), language=cfg.profile.reason_language)
     body: dict = {
@@ -132,14 +150,19 @@ def _retry_after(resp: httpx.Response) -> float | None:
 def apply(
     shortlist: list[Candidate], verdicts: dict[str, Verdict], min_fit: int
 ) -> tuple[list[Candidate], list[Candidate]]:
-    """Attach verdicts and split the shortlist into kept (best first) and dismissed."""
+    """Attach verdicts and split the shortlist into kept (best first) and dismissed.
+
+    A job that passes on its own gets its keyword fit_bonus (e.g. Stripe, MCP); each warning
+    (e.g. a recruiter who rarely replies) takes a point off, which can drop it below min_fit.
+    """
     kept: list[Candidate] = []
     dismissed: list[Candidate] = []
     for cand in shortlist:
         verdict = verdicts.get(cand.job.key)
         if verdict:
-            cand.fit, cand.reason = verdict.fit, verdict.reason
-        if verdict and verdict.fit < min_fit:
+            fit = verdict.fit + (cand.fit_bonus if verdict.fit >= min_fit else 0) - len(cand.warnings)
+            cand.fit, cand.reason = max(0, min(10, fit)), verdict.reason
+        if cand.fit is not None and cand.fit < min_fit:
             dismissed.append(cand)
         else:
             kept.append(cand)  # a job the model skipped stays in, ranked last

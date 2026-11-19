@@ -25,6 +25,7 @@ class ProfileConfig(Section):
 class KeywordGroup(Section):
     terms: list[str]
     weight: int = 1
+    fit_bonus: int = 0  # added to the LLM fit when the job passes anyway
 
 
 class TitleConfig(Section):
@@ -43,10 +44,28 @@ class LocationConfig(Section):
 
 class SeniorityConfig(Section):
     reject_titles: list[str] = []
-    penalty_titles: list[str] = []
-    title_penalty: int = 3
+    ceiling_titles: list[str] = []
+    lower_titles: list[str] = []
     max_years: int = 99
-    years_penalty: int = 4
+
+
+class GigsConfig(Section):
+    companies: list[str] = []
+    phrases: list[str] = []
+    min_score: int = 2
+    max_jobs: int = 3
+    max_results: int = 5
+
+
+class CyprusConfig(Section):
+    local: list[str] = []
+    elsewhere: list[str] = []
+    country: list[str] = []
+    remote_words: list[str] = []
+    office_words: list[str] = []
+    min_score: int = 3
+    max_jobs: int = 5
+    max_results: int = 8
 
 
 class SourcesConfig(Section):
@@ -55,7 +74,12 @@ class SourcesConfig(Section):
     himalayas_country: str = ""
     wwr_feeds: list[str] = []
     dou_feeds: list[str] = []
+    dou_cyprus_feeds: list[str] = []
     djinni_feeds: list[str] = []
+    ergodotisi_urls: list[str] = []
+    telegram_channels: list[str] = []
+    telegram_pages: int = 4
+    detail_pages: int = 40
 
 
 class LlmConfig(Section):
@@ -75,6 +99,8 @@ class Config(Section):
     title: TitleConfig = Field(default_factory=TitleConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
     seniority: SeniorityConfig = Field(default_factory=SeniorityConfig)
+    gigs: GigsConfig = Field(default_factory=GigsConfig)
+    cyprus: CyprusConfig = Field(default_factory=CyprusConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
 

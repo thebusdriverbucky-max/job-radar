@@ -11,20 +11,21 @@ keywords = [
   { terms = ["llm", "openai", "anthropic", "langchain", "langgraph", "rag", "generative ai", "genai", "ai agent"], weight = 2 },
   { terms = ["javascript"], weight = 1 },
   { terms = ["full stack", "full-stack", "fullstack"], weight = 1 },
-  { terms = ["postgresql", "postgres", "neon"], weight = 1 },
+  { terms = ["postgresql", "postgres", "neon", "supabase"], weight = 1 },
   { terms = ["prisma", "drizzle"], weight = 1 },
   { terms = ["tailwind"], weight = 1 },
-  { terms = ["stripe"], weight = 1 },
   { terms = ["ai"], weight = 1 },
-  { terms = ["python"], weight = 1 },
   { terms = ["contract", "contractor", "freelance"], weight = 1 },
   { terms = ["legal tech", "legaltech", "lawtech"], weight = 1 },
+  # Experience the candidate has shipped: these also add fit_bonus to the LLM rating of a job that passes.
+  { terms = ["mcp", "model context protocol", "claude code"], weight = 2, fit_bonus = 1 },
+  { terms = ["stripe", "paddle", "payment", "webhook"], weight = 2, fit_bonus = 1 },
 ]
 
 [run]
 max_age_days = 3      # skip postings older than this
 min_score = 6         # keyword score a job needs to reach the shortlist
-max_results = 15      # jobs per digest
+max_results = 15      # remote jobs per digest; gigs and Cyprus have their own limits below
 notify_empty = false  # also send a message when nothing matched
 
 [profile]
@@ -33,7 +34,7 @@ notify_empty = false  # also send a message when nothing matched
 summary = """
 Full-stack developer with a few years of experience.
 Main stack: TypeScript, React, Next.js, Node.js, PostgreSQL. Ships LLM features to production.
-Wants remote contract or full-time work open to the EU or worldwide; junior to mid level.
+Wants remote contract or full-time work open to the EU or worldwide; junior to mid level, not Senior or Lead.
 """
 reason_language = "Russian"
 
@@ -50,17 +51,23 @@ reject_any = [
   "android", "ios", "flutter", "swift", "kotlin", "mobile",
   "java", "c#", ".net", "asp.net", "php", "laravel", "wordpress", "drupal", "magento",
   "ruby", "rails", "golang", "go developer", "go engineer", "rust", "scala", "elixir", "c++",
-  "embedded", "firmware", "angular", "vue", "svelte", "solidity", "blockchain",
+  "embedded", "firmware", "angular", "vue", "nuxt", "svelte", "react native", "solidity", "blockchain",
+  "python", "django", "fastapi", "flask",
   "salesforce", "sap", "servicenow", "devops", "sre", "site reliability", "platform engineer", "infrastructure",
   "data engineer", "data scientist", "analyst", "qa", "test", "tester", "sdet",
   "designer", "manager", "sales", "support", "recruiter", "unity", "unreal", "game",
 ]
-# ...unless it also names this stack ("Java/React Developer" stays).
+# ...unless this stack is still there once those terms are removed: "Java/React Developer" stays,
+# "React Native Developer" goes.
 rescue_any = ["react", "next.js", "nextjs", "node", "node.js", "typescript", "javascript"]
 
 [location]
 # Location text counts as a fit when it names one of these...
-ok = ["worldwide", "anywhere", "global", "europe", "european", "eu", "emea", "eea", "cet", "eet", "cyprus", "ukraine"]
+ok = [
+  "worldwide", "anywhere", "global", "europe", "european", "eu", "emea", "eea", "cet", "eet",
+  "cyprus", "кіпр", "кипр",
+  "за кордоном",  # DOU: candidates abroad are considered
+]
 # ...and rules the job out when it names one of these instead.
 blocked = [
   "us", "usa", "u.s.", "united states", "canada", "north america", "americas", "latam", "latin america",
@@ -68,6 +75,9 @@ blocked = [
   "argentina", "colombia", "philippines", "singapore", "japan", "israel",
   "germany", "france", "spain", "italy", "netherlands", "poland", "portugal", "romania", "sweden",
   "switzerland", "ireland", "austria", "belgium", "denmark", "greece",
+  # Ukraine-only jobs; "Europe or Ukraine" still counts as Europe. To get them too (most DOU remote
+  # jobs are Ukraine-only), move these three to `ok`.
+  "ukraine", "україна", "украина",
 ]
 bonus = 2
 utc_offsets = [-1, 5]  # a job limited to time zones outside this range is dropped
@@ -82,11 +92,54 @@ reject_phrases = [
 ]
 
 [seniority]
+# Titles with these are dropped.
 reject_titles = ["staff", "principal", "director", "head of", "vp", "vice president", "chief", "cto", "architect", "intern", "internship", "trainee"]
-penalty_titles = ["senior", "sr", "lead"]
-title_penalty = 3
-max_years = 4       # postings that ask for more years lose points
-years_penalty = 4
+# Above the candidate's level: dropped, in the title or in the board's own level field,
+# unless a lower level is named too ("Middle/Senior Developer" goes on to the LLM).
+ceiling_titles = ["senior", "sr", "lead"]
+lower_titles = ["junior", "jr", "middle", "mid", "mid-level", "intermediate"]
+max_years = 3  # postings that ask for more years of experience are dropped; "nice to have" years don't count
+
+[gigs]
+# Paid-per-task side work such as AI training. It gets its own digest section and skips the level rules.
+companies = [
+  "micro1", "mercor", "outlier", "dataannotation", "data annotation tech", "alignerr", "mindrift",
+  "invisible technologies", "remotasks", "toloka", "appen", "prolific",
+]
+phrases = ["ai trainer", "ai tutor", "per approved task", "paid per task", "pay per task", "data annotation", "rlhf"]  # title, company, opening text
+min_score = 2
+max_jobs = 3     # of the LLM's [llm].max_jobs
+max_results = 5
+
+[cyprus]
+# Jobs from the Cyprus boards: no Senior, any work format near home, fully remote anywhere else.
+# Whole words only, so Russian and Ukrainian case forms ("в Лимассоле") are listed one by one.
+local = [  # home area: any format is fine
+  "larnaca", "larnaka", "ларнака", "ларнаке", "ларнаки", "ларнаку", "ларнаці", "λάρνακα",
+  "aradippou", "livadia", "oroklini", "voroklini", "dromolaxia", "kiti", "pervolia", "xylofagou",
+  "athienou", "meneou", "pyla",
+]
+elsewhere = [  # the rest of Cyprus: remote only
+  "limassol", "lemesos", "лимассол", "лимассоле", "лимассола", "лимасол", "лимасоле", "лімасол", "лімасолі",
+  "лімасола", "λεμεσός", "nicosia", "lefkosia", "никосия", "никосии", "нікосія", "нікосії", "λευκωσία",
+  "paphos", "pafos", "пафос", "пафосе", "пафосі", "πάφος", "famagusta", "фамагуста",
+  "ayia napa", "agia napa", "protaras", "paralimni", "kyrenia",
+]
+country = ["cyprus", "кіпр", "кіпрі", "кіпру", "кипр", "кипре", "кипра", "κύπρος"]
+# How a posting's text gives the format away when the board has no field for it.
+remote_words = [
+  "remote", "remotely", "work from home", "wfh",
+  "віддалено", "віддалена", "віддалений", "дистанційно",
+  "удаленно", "удалённо", "удаленная", "удалённая", "удаленный", "удаленка", "удалёнка", "дистанционно",
+]
+office_words = [
+  "hybrid", "on-site", "onsite", "on site", "in-office", "in office", "office-based", "office",
+  "гибрид", "гибридный", "гибридная", "гибридно", "гібрид", "гібридний", "гібридна", "гібридно",
+  "офис", "офисе", "офіс", "офісі",
+]
+min_score = 3
+max_jobs = 5     # of the LLM's [llm].max_jobs
+max_results = 8
 
 [sources]
 disabled = []  # e.g. ["hn_jobs", "djinni"]; names are listed in job_radar/sources.py
@@ -103,12 +156,24 @@ dou_feeds = [
   "https://jobs.dou.ua/vacancies/feeds/?category=AI/ML&remote",
   "https://jobs.dou.ua/vacancies/feeds/?search=Next.js&remote",
 ]
+dou_cyprus_feeds = [  # Larnaca, Limassol, Nicosia, Paphos: any format, checked by [cyprus]
+  "https://jobs.dou.ua/vacancies/feeds/?city=%D0%9B%D0%B0%D1%80%D0%BD%D0%B0%D0%BA%D0%B0",
+  "https://jobs.dou.ua/vacancies/feeds/?city=%D0%9B%D1%96%D0%BC%D0%B0%D1%81%D0%BE%D0%BB",
+  "https://jobs.dou.ua/vacancies/feeds/?city=%D0%9D%D1%96%D0%BA%D0%BE%D1%81%D1%96%D1%8F",
+  "https://jobs.dou.ua/vacancies/feeds/?city=%D0%9F%D0%B0%D1%84%D0%BE%D1%81",
+]
 djinni_feeds = [
   "https://djinni.co/jobs/rss/?primary_keyword=Fullstack&employment=remote",
   "https://djinni.co/jobs/rss/?primary_keyword=Node.js&employment=remote",
   "https://djinni.co/jobs/rss/?primary_keyword=JavaScript&employment=remote",
   "https://djinni.co/jobs/rss/?primary_keyword=React.js&employment=remote",
 ]
+ergodotisi_urls = ["https://ergodotisi.com/en-CY/jobs?categories%5B%5D=88269507"]  # Software Engineering
+telegram_channels = ["cyithr"]  # public channels, read through the t.me/s/ web preview
+telegram_pages = 4              # about 20 posts per page
+# Djinni and ergodotisi feeds leave out the years, countries and first publication date,
+# so the most promising jobs get their page fetched, at most this many per run.
+detail_pages = 40
 
 [llm]
 # Any OpenAI-compatible API; the key comes from LLM_API_KEY. Without a key, jobs are ranked by keywords.
